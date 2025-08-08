@@ -5,6 +5,8 @@
 #include <sstream>
 #include <cstdlib>
 #include <algorithm>
+#include <cmath>
+#include <unordered_set>
 
 using namespace std;
 
@@ -105,10 +107,51 @@ void deleteFacets(vector<Facet>& facets, const vector<int>& indicesToDelete) {
     }
 }
 
+vector<int> findFacetsAtZValues(const vector<Facet>& facets, const vector<float>& zValues, float tolerance = 1e-6) {
+    vector<int> indices;
+    unordered_set<int> uniqueIndices; // To avoid duplicates
+    
+    for (size_t i = 0; i < facets.size(); ++i) {
+        const Facet& f = facets[i];
+        
+        // Check if the facet is parallel to XY plane (normal is (0,0,1) or (0,0,-1))
+        if (fabs(f.normal.x) < tolerance && fabs(f.normal.y) < tolerance && fabs(fabs(f.normal.z) - 1.0) < tolerance) {
+            // Check if all three vertices are at any of the specified Z values
+            for (float zValue : zValues) {
+                if (fabs(f.v1.z - zValue) < tolerance && 
+                    fabs(f.v2.z - zValue) < tolerance && 
+                    fabs(f.v3.z - zValue) < tolerance) {
+                    if (uniqueIndices.find(i) == uniqueIndices.end()) {
+                        indices.push_back(i);
+                        uniqueIndices.insert(i);
+                    }
+                    break; // No need to check other Z values for this facet
+                }
+            }
+        }
+    }
+    
+    return indices;
+}
+
+vector<float> parseZValues(int argc, char* argv[], int startIndex) {
+    vector<float> zValues;
+    for (int i = startIndex; i < argc; ++i) {
+        char* end;
+        float z = strtof(argv[i], &end);
+        if (end != argv[i]) { // Successful conversion
+            zValues.push_back(z);
+        } else {
+            cerr << "Warning: Invalid Z value '" << argv[i] << "' ignored." << endl;
+        }
+    }
+    return zValues;
+}
+
 int main(int argc, char *argv[]) {
-    if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <input.stl> [index1 index2 ...]" << endl;
-        cerr << "Example: " << argv[0] << " input.stl 0 2 5" << endl;
+    if (argc < 3) {
+        cerr << "Usage: " << argv[0] << " <input.stl> <z_value1> [z_value2 ...] [tolerance]" << endl;
+        cerr << "Example: " << argv[0] << " input.stl 10.0 20.5 30.0 0.001" << endl;
         return 1;
     }
 
@@ -116,21 +159,46 @@ int main(int argc, char *argv[]) {
     string outputFile = "output.stl";
     string solidName;
 
+    // Parse Z values and tolerance
+    float tolerance = 1e-6f;
+    vector<float> zValues = parseZValues(argc, argv, 2);
+    
+    // Check if last argument is tolerance (must be after at least one Z value)
+    if (zValues.size() > 0 && argc > zValues.size() + 2) {
+        char* end;
+        tolerance = strtof(argv[argc-1], &end);
+        if (end == argv[argc-1]) { // Conversion failed
+            tolerance = 1e-6f;
+            cerr << "Warning: Invalid tolerance value, using default 1e-6" << endl;
+        } else {
+            // Remove tolerance from zValues if it was mistakenly added
+            if (!zValues.empty() && fabs(zValues.back() - tolerance) < 1e-12) {
+                zValues.pop_back();
+            }
+        }
+    }
+
+    if (zValues.empty()) {
+        cerr << "Error: No valid Z values provided" << endl;
+        return 1;
+    }
+
     vector<Facet> facets;
     readSTL(inputFile, facets, solidName);
 
     cout << "Total facets: " << facets.size() << endl;
-    cout << "Facet indices: 0 to " << facets.size() - 1 << endl;
+    cout << "Z values to delete: ";
+    for (float z : zValues) cout << z << " ";
+    cout << "\nTolerance: " << tolerance << endl;
 
-    if (argc > 2) {
-        vector<int> indicesToDelete;
-        for (int i = 2; i < argc; ++i) {
-            int index = atoi(argv[i]);
-            indicesToDelete.push_back(index);
-        }
-
+    // Find facets at the specified Z values
+    vector<int> indicesToDelete = findFacetsAtZValues(facets, zValues, tolerance);
+    
+    if (!indicesToDelete.empty()) {
         deleteFacets(facets, indicesToDelete);
-        cout << "Deleted " << indicesToDelete.size() << " facets. Remaining: " << facets.size() << endl;
+        cout << "Deleted " << indicesToDelete.size() << " facets at specified Z values. Remaining: " << facets.size() << endl;
+    } else {
+        cout << "No facets found at specified Z values with tolerance " << tolerance << endl;
     }
 
     writeSTL(outputFile, facets, solidName);
